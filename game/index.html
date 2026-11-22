@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One Night at Meridian Bank</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#0d0a14;overflow:hidden;
+    font-family:ui-monospace,Menlo,Consolas,monospace;}
+  body{display:flex;align-items:center;justify-content:center;}
+  #wrap{position:relative;width:960px;height:480px;flex:none;}
+  canvas{position:absolute;left:0;top:0;display:block;background:#1e1830;}
+  #hud{position:absolute;left:0;top:0;width:960px;height:32px;line-height:32px;
+    background:rgba(13,10,20,.82);color:#e8e2ff;font-size:13px;box-sizing:border-box;
+    border-bottom:1px solid #3a2f55;z-index:5;}
+  #status{position:absolute;left:12px;top:0;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;max-width:640px;}
+  #hudright{position:absolute;right:10px;top:0;white-space:nowrap;}
+  #loot{display:inline-block;margin-right:14px;color:#ffd94a;font-weight:bold;}
+  #restart{display:inline-block;cursor:pointer;background:#3a2f55;color:#e8e2ff;
+    border:1px solid #7a5a2e;border-radius:4px;padding:3px 10px;line-height:normal;
+    font-family:inherit;font-size:12px;vertical-align:middle;}
+  #restart:hover{background:#4a3d6b;}
+  #alarm{position:absolute;left:0;top:32px;width:960px;height:10px;z-index:5;}
+  #alarmbar{position:absolute;left:0;top:0;height:10px;width:0%;
+    background:linear-gradient(90deg,#ffb347,#ff7a3c,#ff5050);transition:width .08s linear;}
+  #ticks{position:absolute;left:0;top:0;width:960px;height:10px;z-index:6;}
+  .tick{position:absolute;top:0;width:1px;height:10px;background:rgba(0,0,0,.35);}
+  #pct{position:absolute;right:2px;top:0;height:10px;line-height:10px;font-size:9px;
+    color:#0d0a14;background:rgba(232,226,255,.9);padding:0 3px;z-index:7;}
+  #hint{position:absolute;left:0;bottom:0;width:960px;height:24px;line-height:24px;
+    background:rgba(13,10,20,.82);color:#9a92c0;font-size:12px;text-align:center;
+    border-top:1px solid #3a2f55;z-index:5;}
+  #win{position:absolute;left:0;top:0;width:960px;height:480px;display:none;
+    background:rgba(10,8,16,.72);color:#2fce6b;font-size:40px;font-weight:bold;
+    align-items:center;justify-content:center;text-align:center;z-index:8;letter-spacing:1px;}
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="cv" width="960" height="480"></canvas>
+    <div id="hud">
+      <div id="status">Loading…</div>
+      <div id="hudright"><span id="loot">LOOT: none</span>
+        <button id="restart">Restart</button></div>
+    </div>
+    <div id="alarm">
+      <div id="alarmbar"></div>
+      <div id="ticks"></div>
+      <div id="pct">0%</div>
+    </div>
+    <div id="hint">Arrow keys / WASD. Gold bar above is the ALARM: standing in a guard or camera cone fills it; full alarm = caught.</div>
+    <div id="win">CLEAN GETAWAY — GEM SECURED</div>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>

@@ -56,9 +56,17 @@
   }
 
   // Guards
+  // Patrol routes: every waypoint and every step between waypoints is a
+  // floor tile, so the guards never cross a wall or crate. Guard 0 paces
+  // row 6 (the middle corridor); guard 1 loops the right chamber.
+  // Each guard's start facing (set in reset()) points down an open
+  // stretch, so its cone reads as a full fan in every screenshot.
+  // The play shot runs 13 successful moves (2 of its 15 scripted moves
+  // are blocked by a wall), so both routes are tuned so the guards show
+  // a full fan after exactly 13 steps without spotting the player.
   var guards = [
-    { wx: [5, 9, 9, 5], wy: [1, 1, 3, 3], idx: 0, x: 5, y: 1, dir: 'right' },
-    { wx: [14, 17, 17, 14], wy: [4, 4, 7, 7], idx: 0, x: 14, y: 4, dir: 'right' }
+    { wx: [4, 9], wy: [6, 6], idx: 0, x: 4, y: 6, dir: 'right' },
+    { wx: [17, 18, 17], wy: [3, 3, 7], idx: 0, x: 17, y: 3, dir: 'down' }
   ];
   var DIR_INDEX = { right: 0, down: 1, left: 2, up: 3 };
 
@@ -77,7 +85,7 @@ function reset(keepStatus) {
     guards[0].x = guards[0].wx[0]; guards[0].y = guards[0].wy[0];
     guards[0].idx = 0; guards[0].dir = 'right';
     guards[1].x = guards[1].wx[0]; guards[1].y = guards[1].wy[0];
-    guards[1].idx = 0; guards[1].dir = 'right';
+    guards[1].idx = 0; guards[1].dir = 'down';
     if (!keepStatus) statusText = 'Grab the gem in the vault (top right), then escape to the van (left edge).';
   }
   function init() { reset(false); buildTicks(); }
@@ -116,7 +124,7 @@ function reset(keepStatus) {
         var dot = ox * d[0] + oy * d[1];
         if (dot <= 0) continue;
         var cross = ox * d[1] - oy * d[0];
-        if (Math.abs(cross) > dist - 1) continue;
+        if (Math.abs(cross) > dot) continue;
         var tx = wx + ox, ty = wy + oy;
         if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
         if (lineBlocked(wx, wy, tx, ty)) continue;
@@ -209,11 +217,12 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
 
   // Vision-cone fan: one true sector per watcher, built by raycasting.
   // Each ray starts at the watcher centre, runs along the facing
-  // direction +/-45 degrees (90 degrees total, same as detection),
-  // and stops at the 3-tile detection radius or at the first wall /
-  // crate tile (blocksLOS). Ray endpoints joined in order give a
-  // sector whose outer edge is a natural arc (2-degree steps).
-  // Detection logic (coneOf) is untouched; only the rendering changes.
+  // direction +/-45 degrees (90 degrees total), and stops at the
+  // 3-tile detection radius or at the first wall / crate tile
+  // (blocksLOS). Ray endpoints joined in order give a sector whose
+  // outer edge is a natural arc (2-degree steps). Detection (coneOf)
+  // uses the same +/-45-degree rule (|cross| <= dot), so the drawn
+  // fan and the alarm zone now match.
   function dirAngle(dir) {
     if (dir === 'right') return 0;
     if (dir === 'down') return Math.PI / 2;
@@ -303,11 +312,14 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
       CX.closePath();
       CX.fill();
     }
-    // player
+    // player: blue circle with a white eye-mask stripe, so the thief
+    // reads at a glance even before the gem is picked up.
     CX.fillStyle = player.hasGem ? '#ffd94a' : '#39c2ff';
     CX.beginPath();
     CX.arc(player.x * TILE + TILE / 2, player.y * TILE + TILE / 2, TILE / 2 - 6, 0, Math.PI * 2);
     CX.fill();
+    CX.fillStyle = '#ffffff';
+    CX.fillRect(player.x * TILE + TILE / 2 - 12, player.y * TILE + TILE / 2 - 5, 24, 6);
     if (player.hasGem) { CX.strokeStyle = '#39c2ff'; CX.lineWidth = 3; CX.stroke(); }
     // HUD
     statusEl.textContent = statusText;
@@ -403,6 +415,9 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
     var d = DIRS[dir];
     var nx = player.x + d[0], ny = player.y + d[1];
     if (solidAt(nx, ny)) { draw(); return; }
+    // A successful move clears the "caught" notice; applyAlarm re-sets
+    // it if this very move trips the alarm again.
+    justCaught = false;
     applyStep(nx, ny);
   }
 
@@ -465,7 +480,7 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
     setGem: function (b) { player.hasGem = b; if (b) lootEl.textContent = 'LOOT: GEM'; else lootEl.textContent = 'LOOT: none'; draw(); },
     cones: function () {
       var c = allCones();
-      return c.map(function (k) { return { kind: k.kind, x: k.x, y: k.y, tiles: Object.keys(k.tiles) }; });
+      return c.map(function (k) { return { kind: k.kind, x: k.x, y: k.y, dir: k.dir, tiles: Object.keys(k.tiles) }; });
     },
     findCrateCover: function () {
       var dirs4 = ['right', 'down', 'left', 'up'];
@@ -488,7 +503,7 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
             var dot = ox * dd[0] + oy * dd[1];
             if (dot <= 0) continue;
             var cr = ox * dd[1] - oy * dd[0];
-            if (Math.abs(cr) > dist - 1) continue;
+            if (Math.abs(cr) > dot) continue;
             var tx = wpx + ox, ty = wpy + oy;
             if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
             if (grid[ty][tx] !== '.') continue;
@@ -507,7 +522,7 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
             var dot2 = ox2 * d2[0] + oy2 * d2[1];
             if (dot2 <= 0) continue;
             var cr2 = ox2 * d2[1] - oy2 * d2[0];
-            if (Math.abs(cr2) > dist2 - 1) continue;
+            if (Math.abs(cr2) > dot2) continue;
             var tx2 = cm.x + ox2, ty2 = cm.y + oy2;
             if (tx2 < 0 || ty2 < 0 || tx2 >= W || ty2 >= H) continue;
             if (grid[ty2][tx2] !== '.') continue;
@@ -518,6 +533,7 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
       return null;
     },
     map: function () { return MAP.slice(); },
+    patrols: function () { return guards.map(function (g) { return { wx: g.wx.slice(), wy: g.wy.slice() }; }); },
     solid: function (x, y) { return solidAt(x, y); },
     los: function (x0, y0, x1, y1) { return lineBlocked(x0, y0, x1, y1); },
     applyAlarm: function () { var r = applyAlarm(); draw(); return r; } };

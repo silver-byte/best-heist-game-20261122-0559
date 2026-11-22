@@ -61,9 +61,8 @@
   // row 6 (the middle corridor); guard 1 loops the right chamber.
   // Each guard's start facing (set in reset()) points down an open
   // stretch, so its cone reads as a full fan in every screenshot.
-  // The play shot runs 13 successful moves (2 of its 15 scripted moves
-  // are blocked by a wall), so both routes are tuned so the guards show
-  // a full fan after exactly 13 steps without spotting the player.
+  // The play shot runs 14 successful moves; the guards end mid-patrol
+  // with full fans, and the thief ends inside the top camera's cone.
   var guards = [
     { wx: [4, 9], wy: [6, 6], idx: 0, x: 4, y: 6, dir: 'right' },
     { wx: [17, 18, 17], wy: [3, 3, 7], idx: 0, x: 17, y: 3, dir: 'down' }
@@ -102,15 +101,56 @@ function reset(keepStatus) {
   }
 
   // Vision cone: for watcher at (wx,wy) facing cardinal dir, return set of cone tile keys.
-  function lineBlocked(x0, y0, x1, y1) {
-    var dx = Math.sign(x1 - x0), dy = Math.sign(y1 - y0);
-    var cx = x0, cy = y0;
-    while (cx !== x1 || cy !== y1) {
-      if (cx !== x0 || cy !== y0) { if (blocksLOS(cx, cy)) return true; }
-      if (cx !== x1) cx += dx;
-      if (cy !== y1) cy += dy;
+  // Supercover line of sight, shared by detection (lineBlocked) and the
+  // drawn fan (rayEnd) so the two agree by construction. walkLOS walks a
+  // ray cell by cell (Amanatides-Woo DDA) from (px,py) along (dx,dy) up to
+  // maxDist tile units; visit(cells, t) gets the cells entered at each
+  // step -- one cell, or three at an exact grid corner (the two side cells
+  // plus the diagonal cell). A wall/crate touching the line at a corner
+  // blocks sight, which the old diagonal-only sampling missed: it walked
+  // (4,6)->(3,5)->(2,5) and never saw the wall at (3,6) that the true
+  // centre-to-centre line crosses. Returning false from visit stops the
+  // walk; walkLOS returns the distance at which it stopped, or maxDist.
+  function walkLOS(px, py, dx, dy, maxDist, visit) {
+    var cx = Math.floor(px), cy = Math.floor(py);
+    var stepX = dx > 0 ? 1 : -1, stepY = dy > 0 ? 1 : -1;
+    var tDeltaX = dx !== 0 ? Math.abs(1 / dx) : Infinity;
+    var tDeltaY = dy !== 0 ? Math.abs(1 / dy) : Infinity;
+    var tMaxX = dx > 0 ? (cx + 1 - px) / dx : dx < 0 ? (cx - px) / dx : Infinity;
+    var tMaxY = dy > 0 ? (cy + 1 - py) / dy : dy < 0 ? (cy - py) / dy : Infinity;
+    var EPS = 1e-9, t = 0;
+    while (t < maxDist) {
+      var tN = Math.min(tMaxX, tMaxY);
+      if (tN > maxDist || tN === Infinity) break;
+      if (Math.abs(tMaxX - tMaxY) <= EPS) {
+        var cells = [[cx + stepX, cy], [cx, cy + stepY], [cx + stepX, cy + stepY]];
+        t = tN; tMaxX += tDeltaX; tMaxY += tDeltaY;
+        cx += stepX; cy += stepY;
+        if (visit(cells, t) === false) return t;
+      } else if (tMaxX < tMaxY) {
+        cx += stepX; t = tMaxX; tMaxX += tDeltaX;
+        if (visit([[cx, cy]], t) === false) return t;
+      } else {
+        cy += stepY; t = tMaxY; tMaxY += tDeltaY;
+        if (visit([[cx, cy]], t) === false) return t;
+      }
     }
-    return false;
+    return maxDist;
+  }
+  function lineBlocked(x0, y0, x1, y1) {
+    var dx = x1 - x0, dy = y1 - y0;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    // Normalised direction so walkLOS's t is in tile units and the segment
+    // ends at t == dist (the target centre).
+    var stopped = walkLOS(x0 + 0.5, y0 + 0.5, dx / dist, dy / dist, dist, function (cells) {
+      for (var i = 0; i < cells.length; i++) {
+        var c = cells[i];
+        if (c[0] === x1 && c[1] === y1) continue; // the target tile never blocks
+        if (blocksLOS(c[0], c[1])) return false;
+      }
+      return true;
+    });
+    return stopped < dist;
   }
   function coneOf(wx, wy, dir) {
     var d = DIRS[dir];
@@ -218,11 +258,11 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
   // Vision-cone fan: one true sector per watcher, built by raycasting.
   // Each ray starts at the watcher centre, runs along the facing
   // direction +/-45 degrees (90 degrees total), and stops at the
-  // 3-tile detection radius or at the first wall / crate tile
-  // (blocksLOS). Ray endpoints joined in order give a sector whose
-  // outer edge is a natural arc (2-degree steps). Detection (coneOf)
-  // uses the same +/-45-degree rule (|cross| <= dot), so the drawn
-  // fan and the alarm zone now match.
+  // 3-tile detection radius or at the first wall / crate tile. The ray
+  // marches with the same supercover walkLOS as detection (lineBlocked),
+  // corners included, so the drawn fan and the alarm zone are cut by the
+  // same rule. Detection (coneOf) uses the same +/-45-degree rule
+  // (|cross| <= dot).
   function dirAngle(dir) {
     if (dir === 'right') return 0;
     if (dir === 'down') return Math.PI / 2;
@@ -230,17 +270,20 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
     return -Math.PI / 2;
   }
   function rayEnd(cx, cy, ang, wx, wy) {
-    var R = 3 * TILE, STEP = 3;
+    // Same supercover traversal as detection (lineBlocked): the ray stops
+    // at the first wall/crate cell it touches, corners included, so the
+    // drawn sector and the alarm zone are cut by the same rule.
     var dx = Math.cos(ang), dy = Math.sin(ang);
-    var px = cx, py = cy, t;
-    for (t = STEP; t <= R; t += STEP) {
-      var nx = cx + dx * t, ny = cy + dy * t;
-      var tx = Math.floor(nx / TILE), ty = Math.floor(ny / TILE);
-      if (tx < 0 || ty < 0 || tx >= W || ty >= H) break;
-      if ((tx !== wx || ty !== wy) && blocksLOS(tx, ty)) break;
-      px = nx; py = ny;
-    }
-    return { x: px, y: py };
+    var stopped = walkLOS(cx / TILE, cy / TILE, dx, dy, 3, function (cells) {
+      for (var i = 0; i < cells.length; i++) {
+        var c = cells[i];
+        if (c[0] === wx && c[1] === wy) continue; // the watcher tile never blocks
+        if (blocksLOS(c[0], c[1])) return false;
+      }
+      return true;
+    });
+    var d = stopped >= 3 ? 3 : Math.max(0, stopped - 0.02);
+    return { x: cx + dx * d * TILE, y: cy + dy * d * TILE };
   }
   function drawConeFan(cn) {
     var cx = cn.x * TILE + TILE / 2, cy = cn.y * TILE + TILE / 2;
@@ -335,7 +378,9 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
       barEl.style.background = 'linear-gradient(90deg,#ffb347,#ff7a3c,#ff5050)';
     }
     pctEl.textContent = Math.round(alarm) + '%';
-    pctEl.style.left = (960 * (alarm / 100) - 18) + 'px';
+    // Keep the readout inside the bar: at 0% it used to sit at -18px, on top
+    // of the ALARM label. Clamp it right of the label and inside the bar.
+    pctEl.style.left = Math.min(Math.max(44, 960 * (alarm / 100) - 18), 926) + 'px';
   }
 
   function drawGem(x, y) {
@@ -450,9 +495,12 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
   }
   function runPlayShot() {
     reset(false);
-    // scripted sequence ending with the player alive, mid-level, near a crate,
-    // a guard cone and a camera cone visible nearby but not spotting the player.
-    var seq = ['up','up','up','up','up','right','right','right','right','right','right','right','down','down','down'];
+    // Scripted sequence (14 successful moves): the thief slips up the left
+    // edge, crosses the middle corridor (a guard spots him at step 7, the
+    // alarm decays as he breaks away), and ends at (10,3) inside the top
+    // camera's downward cone with the alarm at 34% -- thief and pink cone
+    // in the same frame, a guard cone visible just below him.
+    var seq = ['up','up','up','right','right','right','right','up','right','right','right','up','right','right'];
     for (var i = 0; i < seq.length; i++) move(seq[i]);
     justCaught = false;
     draw();
@@ -484,6 +532,10 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
     },
     findCrateCover: function () {
       var dirs4 = ['right', 'down', 'left', 'up'];
+      // Only tiles that are out of every cone RIGHT NOW count: the search
+      // below looks at hypothetical patrol positions, and a tile occluded
+      // from one of those can still be visible from the current position.
+      var now = allCones();
       // guard positions across their patrol loop
       var guardPos = [];
       for (var gi = 0; gi < guards.length; gi++) {
@@ -507,7 +559,7 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
             var tx = wpx + ox, ty = wpy + oy;
             if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
             if (grid[ty][tx] !== '.') continue;
-            if (blockedByCrate(wpx, wpy, tx, ty)) return { x: tx, y: ty, gx: wpx, gy: wpy };
+            if (blockedByCrate(wpx, wpy, tx, ty) && !inAnyCone(now, tx, ty)) return { x: tx, y: ty, gx: wpx, gy: wpy };
           }
         }
       }
@@ -526,7 +578,7 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
             var tx2 = cm.x + ox2, ty2 = cm.y + oy2;
             if (tx2 < 0 || ty2 < 0 || tx2 >= W || ty2 >= H) continue;
             if (grid[ty2][tx2] !== '.') continue;
-            if (blockedByCrate(cm.x, cm.y, tx2, ty2)) return { x: tx2, y: ty2, gx: cm.x, gy: cm.y };
+            if (blockedByCrate(cm.x, cm.y, tx2, ty2) && !inAnyCone(now, tx2, ty2)) return { x: tx2, y: ty2, gx: cm.x, gy: cm.y };
           }
         }
       }
@@ -536,18 +588,35 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (lef
     patrols: function () { return guards.map(function (g) { return { wx: g.wx.slice(), wy: g.wy.slice() }; }); },
     solid: function (x, y) { return solidAt(x, y); },
     los: function (x0, y0, x1, y1) { return lineBlocked(x0, y0, x1, y1); },
+    fanRay: function (wx, wy, deg) {
+      var p = rayEnd(wx * TILE + TILE / 2, wy * TILE + TILE / 2, deg * Math.PI / 180, wx, wy);
+      return { x: p.x, y: p.y };
+    },
     applyAlarm: function () { var r = applyAlarm(); draw(); return r; } };
   function blockedByCrate(x0, y0, x1, y1) {
-    var dx = Math.sign(x1 - x0), dy = Math.sign(y1 - y0);
-    var cx = x0, cy = y0;
-    while (cx !== x1 || cy !== y1) {
-      if (cx !== x0 || cy !== y0) {
-        if (grid[cy][cx] === 'C') return true;
-        if (grid[cy][cx] === '#') return false;
+    // Same supercover walk as lineBlocked: true when the first thing the
+    // sightline touches is a crate (a wall first means the crate behind it
+    // is not the cover; a wall and a crate touching the same corner count
+    // as the wall winning).
+    var dx = x1 - x0, dy = y1 - y0;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    var found = false;
+    walkLOS(x0 + 0.5, y0 + 0.5, dx / dist, dy / dist, dist, function (cells) {
+      // A wall (or the map edge) anywhere in this step wins over a crate
+      // in the same step.
+      for (var i = 0; i < cells.length; i++) {
+        var c = cells[i];
+        if (c[0] === x1 && c[1] === y1) continue;
+        if (!grid[c[1]] || grid[c[1]][c[0]] === undefined) return false;
+        if (grid[c[1]][c[0]] === '#') return false;
       }
-      if (cx !== x1) cx += dx;
-      if (cy !== y1) cy += dy;
-    }
-    return false;
+      for (var j = 0; j < cells.length; j++) {
+        var d = cells[j];
+        if (d[0] === x1 && d[1] === y1) continue;
+        if (grid[d[1]] && grid[d[1]][d[0]] === 'C') { found = true; return false; }
+      }
+      return true;
+    });
+    return found;
   }
 })();

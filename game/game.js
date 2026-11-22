@@ -78,7 +78,7 @@ function reset(keepStatus) {
     guards[0].idx = 0; guards[0].dir = 'right';
     guards[1].x = guards[1].wx[0]; guards[1].y = guards[1].wy[0];
     guards[1].idx = 0; guards[1].dir = 'right';
-    if (!keepStatus) statusText = 'Grab the gem in the vault (top right), then escape to the van (bottom left).';
+    if (!keepStatus) statusText = 'Grab the gem in the vault (top right), then escape to the van (left edge).';
   }
   function init() { reset(false); buildTicks(); }
   function buildTicks() {
@@ -128,10 +128,10 @@ function reset(keepStatus) {
   function allCones() {
     var cones = [];
     for (var i = 0; i < guards.length; i++) {
-      cones.push({ kind: 'guard', x: guards[i].x, y: guards[i].y, tiles: coneOf(guards[i].x, guards[i].y, guards[i].dir) });
+      cones.push({ kind: 'guard', x: guards[i].x, y: guards[i].y, dir: guards[i].dir, tiles: coneOf(guards[i].x, guards[i].y, guards[i].dir) });
     }
     for (var j = 0; j < cams.length; j++) {
-      cones.push({ kind: 'camera', x: cams[j].x, y: cams[j].y, tiles: coneOf(cams[j].x, cams[j].y, camDir(cams[j])) });
+      cones.push({ kind: 'camera', x: cams[j].x, y: cams[j].y, dir: camDir(cams[j]), tiles: coneOf(cams[j].x, cams[j].y, camDir(cams[j])) });
     }
     return cones;
   }
@@ -179,9 +179,9 @@ function reset(keepStatus) {
       statusText = 'Heist complete.';
       lootEl.textContent = 'LOOT: GEM';
     } else if (player.hasGem) {
-      statusText = 'Gem taken! Now get to the van (blue, bottom left).';
+      statusText = 'Gem taken! Now get to the van (blue, left edge).';
     } else {
-statusText = 'Grab the gem in the vault (top right), then escape to the van (bottom left).';
+statusText = 'Grab the gem in the vault (top right), then escape to the van (left edge).';
     }
     draw();
   }
@@ -207,52 +207,45 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (bot
     return false;
   }
 
-  // Vision-cone fan: one bright polygon per watcher, built from the convex
-  // hull of its detection tiles plus the watcher centre (the fan vertex).
+  // Vision-cone fan: one true sector per watcher, built by raycasting.
+  // Each ray starts at the watcher centre, runs along the facing
+  // direction +/-45 degrees (90 degrees total, same as detection),
+  // and stops at the 3-tile detection radius or at the first wall /
+  // crate tile (blocksLOS). Ray endpoints joined in order give a
+  // sector whose outer edge is a natural arc (2-degree steps).
   // Detection logic (coneOf) is untouched; only the rendering changes.
-  function hullPoints(pts) {
-    var p = pts.slice();
-    p.sort(function (a, b) { return a.x !== b.x ? a.x - b.x : a.y - b.y; });
-    var uniq = [];
-    for (var i = 0; i < p.length; i++) {
-      if (i && p[i].x === p[i - 1].x && p[i].y === p[i - 1].y) continue;
-      uniq.push(p[i]);
+  function dirAngle(dir) {
+    if (dir === 'right') return 0;
+    if (dir === 'down') return Math.PI / 2;
+    if (dir === 'left') return Math.PI;
+    return -Math.PI / 2;
+  }
+  function rayEnd(cx, cy, ang, wx, wy) {
+    var R = 3 * TILE, STEP = 3;
+    var dx = Math.cos(ang), dy = Math.sin(ang);
+    var px = cx, py = cy, t;
+    for (t = STEP; t <= R; t += STEP) {
+      var nx = cx + dx * t, ny = cy + dy * t;
+      var tx = Math.floor(nx / TILE), ty = Math.floor(ny / TILE);
+      if (tx < 0 || ty < 0 || tx >= W || ty >= H) break;
+      if ((tx !== wx || ty !== wy) && blocksLOS(tx, ty)) break;
+      px = nx; py = ny;
     }
-    if (uniq.length < 3) return uniq;
-    function cross(o, a, b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); }
-    var lower = [];
-    for (var j = 0; j < uniq.length; j++) {
-      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], uniq[j]) <= 0) lower.pop();
-      lower.push(uniq[j]);
-    }
-    var upper = [];
-    for (var k = uniq.length - 1; k >= 0; k--) {
-      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], uniq[k]) <= 0) upper.pop();
-      upper.push(uniq[k]);
-    }
-    lower.pop();
-    upper.pop();
-    return lower.concat(upper);
+    return { x: px, y: py };
   }
   function drawConeFan(cn) {
-    var pts = [{ x: cn.x * TILE + TILE / 2, y: cn.y * TILE + TILE / 2 }];
-    for (var k in cn.tiles) {
-      if (!cn.tiles.hasOwnProperty(k)) continue;
-      var p = k.split(',');
-      var tx = parseInt(p[0], 10) * TILE, ty = parseInt(p[1], 10) * TILE;
-      pts.push({ x: tx, y: ty });
-      pts.push({ x: tx + TILE, y: ty });
-      pts.push({ x: tx, y: ty + TILE });
-      pts.push({ x: tx + TILE, y: ty + TILE });
-    }
-    var hull = hullPoints(pts);
-    if (hull.length < 3) return;
+    var cx = cn.x * TILE + TILE / 2, cy = cn.y * TILE + TILE / 2;
+    var base = dirAngle(cn.dir);
     var guard = cn.kind === 'guard';
     CX.beginPath();
-    CX.moveTo(hull[0].x, hull[0].y);
-    for (var i = 1; i < hull.length; i++) CX.lineTo(hull[i].x, hull[i].y);
+    CX.moveTo(cx, cy);
+    var a;
+    for (a = -45; a <= 45; a += 2) {
+      var p = rayEnd(cx, cy, base + a * Math.PI / 180, cn.x, cn.y);
+      CX.lineTo(p.x, p.y);
+    }
     CX.closePath();
-    CX.fillStyle = guard ? 'rgba(255,214,64,0.55)' : 'rgba(255,64,190,0.55)';
+    CX.fillStyle = guard ? 'rgba(255,214,64,0.5)' : 'rgba(255,64,190,0.5)';
     CX.fill();
     CX.lineWidth = 2;
     CX.strokeStyle = guard ? 'rgba(255,226,110,0.95)' : 'rgba(255,110,215,0.95)';
@@ -273,9 +266,8 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (bot
         else if (c === 'V') { drawVan(x, y); }
       }
     }
-    // cones: one bright fan polygon per watcher (watcher centre = vertex),
-    // built from the convex hull of its detection tiles. Detection logic
-    // (coneOf) is untouched; only the rendering changes.
+    // cones: one true raycast sector per watcher (watcher centre = vertex).
+    // Detection logic (coneOf) is untouched; only the rendering changes.
     var cones = allCones();
     for (var ci = 0; ci < cones.length; ci++) drawConeFan(cones[ci]);
     // draw gem & van again on top (above cones)
@@ -335,6 +327,9 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (bot
   }
 
   function drawGem(x, y) {
+    // Picked up: the vault stays empty (gem reappears on caught reset,
+    // when applyAlarm/reset clears player.hasGem).
+    if (player.hasGem) return;
     var cx0 = x * TILE + TILE / 2, cy0 = y * TILE + TILE / 2;
     CX.fillStyle = '#ffd94a';
     CX.beginPath();
@@ -346,18 +341,61 @@ statusText = 'Grab the gem in the vault (top right), then escape to the van (bot
     CX.fill();
     CX.fillStyle = '#fff3c0';
     CX.fillRect(cx0 - 8, cy0 - 2, 6, 4);
+    CX.font = 'bold 11px monospace';
+    CX.textAlign = 'right';
+    CX.textBaseline = 'middle';
+    CX.fillStyle = '#ffe9a8';
+    CX.fillText('GEM', cx0 - 18, cy0);
+  }
+  function roundRectPath(x, y, w, h, r) {
+    CX.beginPath();
+    CX.moveTo(x + r, y);
+    CX.lineTo(x + w - r, y);
+    CX.arcTo(x + w, y, x + w, y + r, r);
+    CX.lineTo(x + w, y + h - r);
+    CX.arcTo(x + w, y + h, x + w - r, y + h, r);
+    CX.lineTo(x + r, y + h);
+    CX.arcTo(x, y + h, x, y + h - r, r);
+    CX.lineTo(x, y + r);
+    CX.arcTo(x, y, x + r, y, r);
+    CX.closePath();
   }
   function drawVan(x, y) {
     var cx0 = x * TILE + TILE / 2, cy0 = y * TILE + TILE / 2;
-    CX.fillStyle = '#39c2ff';
-    CX.fillRect(cx0 - 17, cy0 - 5, 34, 10);
+    // Side-view van silhouette, about 2 tiles wide: cargo body + cab
+    // with windshield + two wheels. Blue body, drawn on top of cones.
+    var bx = cx0 - 24, by = cy0 - 16, bw = 62, bh = 26;
+    CX.fillStyle = '#0b6fa8';
+    roundRectPath(bx - 1, by - 1, bw + 2, bh + 2, 7);
+    CX.fill();
+    CX.fillStyle = '#2f9be8';
+    roundRectPath(bx, by, bw, bh, 6);
+    CX.fill();
+    // cab (front, right end) + windshield
+    CX.fillStyle = '#2f9be8';
+    roundRectPath(bx + bw - 2, by + 4, 26, bh - 4, 5);
+    CX.fill();
+    CX.fillStyle = '#cfeeff';
+    CX.fillRect(bx + bw + 12, by + 8, 10, 9);
+    // side stripe
+    CX.fillStyle = 'rgba(255,255,255,0.35)';
+    CX.fillRect(bx + 6, by + 6, bw - 34, 3);
+    // wheels
+    CX.fillStyle = '#101018';
+    CX.beginPath(); CX.arc(bx + 14, by + bh, 7, 0, Math.PI * 2); CX.fill();
+    CX.beginPath(); CX.arc(bx + bw + 8, by + bh, 7, 0, Math.PI * 2); CX.fill();
+    CX.fillStyle = '#c8ccd4';
+    CX.beginPath(); CX.arc(bx + 14, by + bh, 3, 0, Math.PI * 2); CX.fill();
+    CX.beginPath(); CX.arc(bx + bw + 8, by + bh, 3, 0, Math.PI * 2); CX.fill();
+    // label above the body
+    CX.font = 'bold 11px monospace';
+    CX.textAlign = 'center';
+    CX.textBaseline = 'middle';
     CX.fillStyle = '#9fe4ff';
-    CX.fillRect(cx0 - 10, cy0 - 3, 8, 6);
-    CX.fillStyle = '#ffd94a';
-    CX.fillRect(cx0 - 4, cy0 - 1, 4, 2);
+    CX.fillText('VAN', bx + bw / 2 + 8, by - 9);
   }
   function resetStatusText() {
-    statusText = 'Grab the gem in the vault (top right), then escape to the van (bottom left).';
+    statusText = 'Grab the gem in the vault (top right), then escape to the van (left edge).';
   }
 
   function move(dir) {

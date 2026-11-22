@@ -78,9 +78,20 @@ function reset(keepStatus) {
     guards[0].idx = 0; guards[0].dir = 'right';
     guards[1].x = guards[1].wx[0]; guards[1].y = guards[1].wy[0];
     guards[1].idx = 0; guards[1].dir = 'right';
-    if (!keepStatus) statusText = 'Grab the gem in the vault (top right), then escape to the van (bottom left). Cameras sweep, guards patrol — cones raise the alarm.';
+    if (!keepStatus) statusText = 'Grab the gem in the vault (top right), then escape to the van (bottom left). 2 guards, 2 cameras, cones reach 3 tiles.';
   }
-  function init() { reset(false); }
+  function init() { reset(false); buildTicks(); }
+  function buildTicks() {
+    var tk = document.getElementById('ticks');
+    tk.innerHTML = '';
+    var marks = [25, 50, 75];
+    for (var i = 0; i < marks.length; i++) {
+      var d = document.createElement('div');
+      d.className = 'tick';
+      d.style.left = (960 * (marks[i] / 100) - 1) + 'px';
+      tk.appendChild(d);
+    }
+  }
 
   // Vision cone: for watcher at (wx,wy) facing cardinal dir, return set of cone tile keys.
   function lineBlocked(x0, y0, x1, y1) {
@@ -170,7 +181,7 @@ function reset(keepStatus) {
     } else if (player.hasGem) {
       statusText = 'Gem taken! Now get to the van (blue, bottom left).';
     } else {
-      statusText = 'Grab the gem in the vault (top right), then escape to the van (bottom left). Cameras sweep, guards patrol — cones raise the alarm.';
+statusText = 'Grab the gem in the vault (top right), then escape to the van (bottom left). 2 guards, 2 cameras, cones reach 3 tiles.';
     }
     draw();
   }
@@ -241,9 +252,18 @@ function reset(keepStatus) {
       var cx0 = cam.x * TILE + TILE / 2, cy0 = cam.y * TILE + TILE / 2;
       CX.fillStyle = '#ff50c8';
       CX.fillRect(cx0 - 7, cy0 - 7, 14, 14);
+      // small arrow tick showing the sweep direction
       var cd = DIRS[camDir(cam)];
+      var atx = cx0 + cd[0] * 9, aty = cy0 + cd[1] * 9;
+      var abx = cx0 - cd[0] * 9, aby = cy0 - cd[1] * 9;
+      var apx = -cd[1], apy = cd[0];
       CX.fillStyle = '#ffffff';
-      CX.fillRect(cx0 + cd[0] * 11 - 2, cy0 + cd[1] * 11 - 2, 4, 4);
+      CX.beginPath();
+      CX.moveTo(atx, aty);
+      CX.lineTo(abx + apx * 4, aby + apy * 4);
+      CX.lineTo(abx - apx * 4, aby - apy * 4);
+      CX.closePath();
+      CX.fill();
     }
     // player
     CX.fillStyle = player.hasGem ? '#ffd94a' : '#39c2ff';
@@ -256,6 +276,14 @@ function reset(keepStatus) {
     if (justCaught) statusEl.textContent = 'ALARM TRIPPED — caught! Restarting position.';
     lootEl.textContent = player.hasGem ? 'LOOT: GEM' : 'LOOT: none';
     barEl.style.width = alarm + '%';
+    // pulse red while the alarm is high (alternate brightness on the step counter)
+    if (alarm >= 67) {
+      barEl.style.background = (tick % 2 === 0)
+        ? 'linear-gradient(90deg,#ff5050,#e73b3b)'
+        : 'linear-gradient(90deg,#d23636,#b02828)';
+    } else {
+      barEl.style.background = 'linear-gradient(90deg,#ffb347,#ff7a3c,#ff5050)';
+    }
     pctEl.textContent = Math.round(alarm) + '%';
     pctEl.style.left = (960 * (alarm / 100) - 18) + 'px';
   }
@@ -283,7 +311,7 @@ function reset(keepStatus) {
     CX.fillRect(cx0 - 4, cy0 - 1, 4, 2);
   }
   function resetStatusText() {
-    statusText = 'Grab the gem in the vault (top right), then escape to the van (bottom left). Cameras sweep, guards patrol — cones raise the alarm.';
+    statusText = 'Grab the gem in the vault (top right), then escape to the van (bottom left). 2 guards, 2 cameras, cones reach 3 tiles.';
   }
 
   function move(dir) {
